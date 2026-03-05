@@ -314,17 +314,6 @@ export default function App() {
     setNotifications(notifs);
   }, [projects]);
 
-  const urgentCount = projects.filter(p => {
-    if (!p.pcd) return false;
-    const d = daysUntil(p.pcd);
-    return d >= 0 && d <= 7;
-  }).length;
-
-  const activeCount = projects.filter(p => {
-    const status = getProjectStatus(p);
-    return status.key === "active";
-  }).length;
-
   // ── CRUD: Add / Update ──
   const handleSave = async (project) => {
     setSaving(true);
@@ -380,9 +369,16 @@ export default function App() {
     else { setSortField(field); setSortDir("asc"); }
   };
 
-  const totalFee = projects.reduce((s, p) => s + p.fee, 0);
-  const totalTarget = rate > 0 ? projects.reduce((s, p) => s + Math.round(p.fee / rate), 0) : 0;
-  const totalSpent = projects.reduce((s, p) => s + p.hoursSpent, 0);
+  const totalFee = filtered.filter(p => getProjectStatus(p).key === "active").reduce((s, p) => s + p.fee, 0);
+  const totalTarget = rate > 0 ? filtered.filter(p => getProjectStatus(p).key === "active").reduce((s, p) => s + Math.round(p.fee / rate), 0) : 0;
+  const totalSpent = filtered.filter(p => getProjectStatus(p).key === "active").reduce((s, p) => s + p.hoursSpent, 0);
+
+  const activeCount = filtered.filter(p => getProjectStatus(p).key === "active").length;
+  const urgentCount = filtered.filter(p => {
+    if (!p.pcd || getProjectStatus(p).key !== "active") return false;
+    const d = daysUntil(p.pcd);
+    return d >= 0 && d <= 7;
+  }).length;
 
   const SortHeader = ({ field, children, width, align }) => (
     <th onClick={() => handleSort(field)} style={{ padding: "12px 10px", textAlign: align || "left", fontSize: 10.5, fontWeight: 700, color: "#8a8a8a", textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap", width, borderBottom: "2px solid #2a2d35", background: "#13151b", position: "sticky", top: 0, zIndex: 2 }}>
