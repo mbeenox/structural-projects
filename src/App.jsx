@@ -22,13 +22,19 @@ function getDeadlineStatus(dateStr) {
   if (d < 0) return "overdue"; if (d <= 7) return "urgent"; if (d <= 14) return "warning"; return "ok";
 }
 
+function getProjectStatus(p) {
+  if (p.holdDate) return { label: "Hold – " + formatDate(p.holdDate), key: "hold" };
+  if (p.pcd && daysUntil(p.pcd) < 0) return { label: "Completed", key: "completed" };
+  return { label: "Current", key: "current" };
+}
+
 // Map DB row → app object
 function rowToProject(r) {
-  return { id: r.id, name: r.name, number: r.number, state: r.state, manager: r.manager, type: r.type, goBy: r.go_by || "", kickOff: r.kick_off || "", qcll: r.qcll || "", pcd: r.pcd || "", fee: Number(r.fee), targetHours: Number(r.target_hours), hoursSpent: Number(r.hours_spent) };
+  return { id: r.id, name: r.name, number: r.number, state: r.state, manager: r.manager, type: r.type, goBy: r.go_by || "", kickOff: r.kick_off || "", qcll: r.qcll || "", pcd: r.pcd || "", fee: Number(r.fee), targetHours: Number(r.target_hours), hoursSpent: Number(r.hours_spent), holdDate: r.hold_date || "" };
 }
 // Map app object → DB row
 function projectToRow(p) {
-  return { name: p.name, number: p.number, state: p.state, manager: p.manager, type: p.type, go_by: p.goBy, kick_off: p.kickOff || null, qcll: p.qcll || null, pcd: p.pcd || null, fee: p.fee, target_hours: p.targetHours, hours_spent: p.hoursSpent };
+  return { name: p.name, number: p.number, state: p.state, manager: p.manager, type: p.type, go_by: p.goBy, kick_off: p.kickOff || null, qcll: p.qcll || null, pcd: p.pcd || null, fee: p.fee, target_hours: p.targetHours, hours_spent: p.hoursSpent, hold_date: p.holdDate || null };
 }
 
 // ── Icons ────────────────────────────────────────────────
@@ -96,7 +102,7 @@ function Toast({ message, type, onClose }) {
 
 // ── Project Form ─────────────────────────────────────────
 function ProjectForm({ project, onSave, onCancel, saving }) {
-  const [form, setForm] = useState(project || { name: "", number: "", state: "TX", manager: "MJ", type: "TFO", goBy: "", kickOff: "", qcll: "", pcd: "", fee: 0, hoursSpent: 0 });
+  const [form, setForm] = useState(project || { name: "", number: "", state: "TX", manager: "MJ", type: "TFO", goBy: "", kickOff: "", qcll: "", pcd: "", fee: 0, hoursSpent: 0, holdDate: "" });
   const set = (f) => (e) => setForm(p => ({ ...p, [f]: e.target.value }));
   const setNum = (f) => (e) => setForm(p => ({ ...p, [f]: parseFloat(e.target.value) || 0 }));
   return (
@@ -113,6 +119,12 @@ function ProjectForm({ project, onSave, onCancel, saving }) {
         <Field label="QC / LL Date"><input style={inputStyle} type="date" value={form.qcll} onChange={set("qcll")} /></Field>
         <Field label="P / CD Date"><input style={inputStyle} type="date" value={form.pcd} onChange={set("pcd")} /></Field>
         <Field label="Hours Spent"><input style={inputStyle} type="number" step="0.5" value={form.hoursSpent} onChange={setNum("hoursSpent")} /></Field>
+        <Field label="Hold Date (leave empty if not on hold)">
+          <div style={{ display: "flex", gap: 8 }}>
+            <input style={inputStyle} type="date" value={form.holdDate} onChange={set("holdDate")} />
+            {form.holdDate && <button onClick={() => setForm(f => ({ ...f, holdDate: "" }))} style={{ ...btnSecondary, padding: "8px 12px", fontSize: 11, whiteSpace: "nowrap", flexShrink: 0 }}>Clear</button>}
+          </div>
+        </Field>
       </div>
       <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 8 }}>
         <button onClick={onCancel} style={btnSecondary}>Cancel</button>
@@ -495,8 +507,9 @@ export default function App() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr>
-                    <SortHeader field="name" width="22%">Project Name</SortHeader>
-                    <SortHeader field="number" width="9%">Proj #</SortHeader>
+                    <SortHeader field="name" width="20%">Project Name</SortHeader>
+                    <th style={{ padding: "12px 10px", textAlign: "left", fontSize: 10.5, fontWeight: 700, color: "#8a8a8a", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap", width: "8%", borderBottom: "2px solid #2a2d35", background: "#13151b", position: "sticky", top: 0, zIndex: 2 }}>Status</th>
+                    <SortHeader field="number" width="8%">Proj #</SortHeader>
                     <SortHeader field="state" width="4%">St</SortHeader>
                     <SortHeader field="manager" width="5%">PM</SortHeader>
                     <SortHeader field="type" width="10%">Type</SortHeader>
@@ -516,9 +529,17 @@ export default function App() {
                     const targetHrs = rate > 0 ? Math.round(p.fee / rate) : 0;
                     const progress = targetHrs > 0 ? Math.min((p.hoursSpent / targetHrs) * 100, 100) : 0;
                     const overBudget = p.hoursSpent > targetHrs;
+                    const status = getProjectStatus(p);
+                    const isGreyed = status.key === "hold" || status.key === "completed";
+                    const rowOpacity = isGreyed ? 0.45 : 1;
+                    const statusColors = { current: { bg: "rgba(34,197,94,0.1)", fg: "#4ade80" }, completed: { bg: "rgba(59,130,246,0.1)", fg: "#60a5fa" }, hold: { bg: "rgba(245,158,11,0.1)", fg: "#fbbf24" } };
+                    const sc = statusColors[status.key];
                     return (
-                      <tr key={p.id} style={{ borderBottom: "1px solid #1a1d23" }}>
+                      <tr key={p.id} style={{ borderBottom: "1px solid #1a1d23", opacity: rowOpacity, transition: "opacity 0.3s", background: isGreyed ? "rgba(255,255,255,0.02)" : "transparent" }}>
                         <td style={{ padding: "11px 10px", color: "#e8e8e8", fontWeight: 600 }}>{p.name}</td>
+                        <td style={{ padding: "11px 10px" }}>
+                          <span style={{ background: sc.bg, color: sc.fg, padding: "3px 8px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, display: "inline-block", whiteSpace: "nowrap" }}>{status.label}</span>
+                        </td>
                         <td style={{ padding: "11px 10px", color: "#999", fontFamily: "'Space Mono', monospace", fontSize: 11.5 }}>{p.number}</td>
                         <td style={{ padding: "11px 10px", color: "#888", textAlign: "center" }}>{p.state}</td>
                         <td style={{ padding: "11px 10px" }}><span style={{ background: "rgba(212,160,83,0.12)", color: "#d4a053", padding: "3px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700 }}>{p.manager}</span></td>
@@ -557,7 +578,7 @@ export default function App() {
                 </tbody>
                 <tfoot>
                   <tr style={{ borderTop: "2px solid #2a2d35", background: "#13151b" }}>
-                    <td colSpan={8} style={{ padding: "12px 10px", fontWeight: 700, color: "#999", fontSize: 12 }}>TOTALS ({filtered.length} projects)</td>
+                    <td colSpan={9} style={{ padding: "12px 10px", fontWeight: 700, color: "#999", fontSize: 12 }}>TOTALS ({filtered.length} projects)</td>
                     <td style={{ padding: "12px 10px", textAlign: "right", fontWeight: 800, color: "#4ade80", fontFamily: "'Space Mono', monospace", fontSize: 13 }}>{formatCurrency(filtered.reduce((s, p) => s + p.fee, 0))}</td>
                     <td style={{ padding: "12px 10px", textAlign: "right", fontWeight: 700, color: "#aaa", fontFamily: "'Space Mono', monospace", fontSize: 13 }}>{rate > 0 ? filtered.reduce((s, p) => s + Math.round(p.fee / rate), 0).toLocaleString() : "—"}</td>
                     <td style={{ padding: "12px 10px", textAlign: "right", fontWeight: 700, color: "#888", fontFamily: "'Space Mono', monospace", fontSize: 13 }}>{filtered.reduce((s, p) => s + p.hoursSpent, 0).toFixed(1)}</td>
