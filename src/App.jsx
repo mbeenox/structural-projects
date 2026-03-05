@@ -28,6 +28,11 @@ function getProjectStatus(p) {
   return { label: "Active", key: "active" };
 }
 
+function isArchived(p) {
+  if (!p.pcd) return false;
+  return daysUntil(p.pcd) < -30 && !p.holdDate;
+}
+
 // Map DB row → app object
 function rowToProject(r) {
   return { id: r.id, name: r.name, number: r.number, state: r.state, manager: r.manager, type: r.type, goBy: r.go_by || "", kickOff: r.kick_off || "", qcll: r.qcll || "", pcd: r.pcd || "", fee: Number(r.fee), targetHours: Number(r.target_hours), hoursSpent: Number(r.hours_spent), holdDate: r.hold_date || "" };
@@ -249,6 +254,8 @@ export default function App() {
   const [notifSent, setNotifSent] = useState({});
   const [showNotifModal, setShowNotifModal] = useState(false);
   const [notifTarget, setNotifTarget] = useState(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [currentView, setCurrentView] = useState("table");
   const [rate, setRate] = useState(100);
   const [rateLoaded, setRateLoaded] = useState(false);
@@ -333,11 +340,32 @@ export default function App() {
     fetchProjects();
   };
 
-  // ── CRUD: Delete ──
-  const handleDelete = async (id) => {
-    const { error } = await supabase.from("projects").delete().eq("id", id);
+  // ── CRUD: Delete / Archive ──
+  const handleDeleteClick = (project) => {
+    setDeleteTarget(project);
+    setShowDeleteModal(true);
+  };
+
+  const handleArchive = async () => {
+    if (!deleteTarget) return;
+    // Set PCD to 31 days ago to force archiving, preserve other data
+    const archiveDate = new Date();
+    archiveDate.setDate(archiveDate.getDate() - 31);
+    const pcdStr = archiveDate.toISOString().split("T")[0];
+    const { error } = await supabase.from("projects").update({ pcd: pcdStr, hold_date: null }).eq("id", deleteTarget.id);
+    if (error) showToast("Archive failed: " + error.message, "error");
+    else { showToast(`"${deleteTarget.name}" moved to archive`, "success"); fetchProjects(); }
+    setShowDeleteModal(false);
+    setDeleteTarget(null);
+  };
+
+  const handlePermanentDelete = async () => {
+    if (!deleteTarget) return;
+    const { error } = await supabase.from("projects").delete().eq("id", deleteTarget.id);
     if (error) showToast("Delete failed: " + error.message, "error");
-    else { showToast("Project deleted", "success"); fetchProjects(); }
+    else { showToast(`"${deleteTarget.name}" permanently deleted`, "success"); fetchProjects(); }
+    setShowDeleteModal(false);
+    setDeleteTarget(null);
   };
 
   // ── Notification send ──
@@ -351,18 +379,23 @@ export default function App() {
   };
 
   // ── Filter & Sort ──
-  const filtered = projects.filter(p => {
+  const applyFilters = (p) => {
     if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.number.toLowerCase().includes(search.toLowerCase())) return false;
     if (filterManager !== "All" && p.manager !== filterManager) return false;
     if (filterType !== "All" && p.type !== filterType) return false;
     return true;
-  }).sort((a, b) => {
+  };
+  const applySorting = (a, b) => {
     let va = a[sortField], vb = b[sortField];
     if (typeof va === "string") { va = va.toLowerCase(); vb = (vb || "").toLowerCase(); }
     if (va < vb) return sortDir === "asc" ? -1 : 1;
     if (va > vb) return sortDir === "asc" ? 1 : -1;
     return 0;
-  });
+  };
+
+  const filtered = projects.filter(p => !isArchived(p) && applyFilters(p)).sort(applySorting);
+  const archivedFiltered = projects.filter(p => isArchived(p) && applyFilters(p)).sort(applySorting);
+  const archivedCount = projects.filter(p => isArchived(p)).length;
 
   const handleSort = (field) => {
     if (sortField === field) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -418,8 +451,13 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <button onClick={fetchProjects} className="btn-hover" style={{ background: "none", border: "1px solid #2a2d35", borderRadius: 8, padding: "8px 10px", cursor: "pointer", color: "#666", display: "flex", alignItems: "center" }} title="Refresh data"><RefreshIcon /></button>
             <div style={{ display: "flex", background: "#1a1d23", borderRadius: 8, border: "1px solid #2a2d35", overflow: "hidden" }}>
-              {["table", "dashboard"].map(v => (
-                <button key={v} onClick={() => setCurrentView(v)} style={{ padding: "7px 14px", background: currentView === v ? "#d4a053" : "transparent", color: currentView === v ? "#111" : "#888", border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", textTransform: "capitalize" }}>{v}</button>
+              {["table", "archive", "dashboard"].map(v => (
+                <button key={v} onClick={() => setCurrentView(v)} style={{ padding: "7px 14px", background: currentView === v ? "#d4a053" : "transparent", color: currentView === v ? "#111" : "#888", border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", textTransform: "capitalize", display: "flex", alignItems: "center", gap: 5 }}>
+                  {v}
+                  {v === "archive" && archivedCount > 0 && (
+                    <span style={{ background: currentView === "archive" ? "rgba(0,0,0,0.2)" : "#2a2d35", color: currentView === "archive" ? "#111" : "#888", fontSize: 10, fontWeight: 800, borderRadius: 8, padding: "1px 6px", minWidth: 18, textAlign: "center" }}>{archivedCount}</span>
+                  )}
+                </button>
               ))}
             </div>
             {/* Notifications */}
@@ -481,6 +519,98 @@ export default function App() {
           </div>
         ) : currentView === "dashboard" ? (
           <DashboardView projects={projects} notifications={notifications} rate={rate} />
+        ) : currentView === "archive" ? (
+          <>
+            {/* ── ARCHIVE FILTERS ── */}
+            <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 20, padding: "14px 18px", background: "#12141a", border: "1px solid #1e2028", borderRadius: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#60a5fa", textTransform: "uppercase", letterSpacing: "0.06em", fontFamily: "'DM Sans', sans-serif" }}>Archive</span>
+                <span style={{ fontSize: 11, color: "#555", fontFamily: "'Space Mono', monospace" }}>Projects completed 30+ days ago</span>
+              </div>
+              <div style={{ width: 1, height: 28, background: "#2a2d35", flexShrink: 0 }} />
+              <div style={{ position: "relative", flex: "1 1 220px" }}>
+                <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#555" }}><SearchIcon /></span>
+                <input placeholder="Search archived projects..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...inputStyle, paddingLeft: 36 }} />
+              </div>
+              <select value={filterManager} onChange={e => setFilterManager(e.target.value)} style={{ ...selectStyle, width: 160 }}>
+                <option value="All">All Managers</option>
+                {MANAGERS.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+
+            {/* ── ARCHIVE TABLE ── */}
+            <div style={{ borderRadius: 12, border: "1px solid #1e2028", overflow: "auto", background: "#12141a" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <SortHeader field="name" width="20%">Project Name</SortHeader>
+                    <th style={{ padding: "12px 10px", textAlign: "left", fontSize: 10.5, fontWeight: 700, color: "#8a8a8a", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap", width: "8%", borderBottom: "2px solid #2a2d35", background: "#13151b", position: "sticky", top: 0, zIndex: 2 }}>Status</th>
+                    <SortHeader field="number" width="8%">Proj #</SortHeader>
+                    <SortHeader field="state" width="4%">St</SortHeader>
+                    <SortHeader field="manager" width="5%">PM</SortHeader>
+                    <SortHeader field="type" width="10%">Type</SortHeader>
+                    <SortHeader field="kickOff" width="8%">Kick Off</SortHeader>
+                    <SortHeader field="qcll" width="8%">QC / LL</SortHeader>
+                    <SortHeader field="pcd" width="8%">P / CD</SortHeader>
+                    <SortHeader field="fee" width="7%" align="right">Fee</SortHeader>
+                    <SortHeader field="targetHours" width="7%" align="right">Target Hrs</SortHeader>
+                    <SortHeader field="hoursSpent" width="6%" align="right">Spent</SortHeader>
+                    <th style={{ padding: "12px 10px", fontSize: 10.5, fontWeight: 700, color: "#8a8a8a", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "2px solid #2a2d35", background: "#13151b", position: "sticky", top: 0, zIndex: 2, width: "6%", textAlign: "center" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {archivedFiltered.length === 0 && (
+                    <tr><td colSpan={13} style={{ padding: 40, textAlign: "center", color: "#555", fontSize: 14 }}>No archived projects</td></tr>
+                  )}
+                  {archivedFiltered.map(p => {
+                    const pcdStatus = getDeadlineStatus(p.pcd);
+                    const qcStatus = getDeadlineStatus(p.qcll);
+                    const targetHrs = rate > 0 ? Math.round(p.fee / rate) : 0;
+                    const progress = targetHrs > 0 ? Math.min((p.hoursSpent / targetHrs) * 100, 100) : 0;
+                    const overBudget = p.hoursSpent > targetHrs;
+                    return (
+                      <tr key={p.id} style={{ borderBottom: "1px solid #1a1d23", opacity: 0.6 }}>
+                        <td style={{ padding: "11px 10px", color: "#e8e8e8", fontWeight: 600 }}>{p.name}</td>
+                        <td style={{ padding: "11px 10px" }}>
+                          <span style={{ background: "rgba(107,114,128,0.15)", color: "#9ca3af", padding: "3px 8px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, display: "inline-block", whiteSpace: "nowrap" }}>Archived</span>
+                        </td>
+                        <td style={{ padding: "11px 10px", color: "#999", fontFamily: "'Space Mono', monospace", fontSize: 11.5 }}>{p.number}</td>
+                        <td style={{ padding: "11px 10px", color: "#888", textAlign: "center" }}>{p.state}</td>
+                        <td style={{ padding: "11px 10px" }}><span style={{ background: "rgba(212,160,83,0.12)", color: "#d4a053", padding: "3px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700 }}>{p.manager}</span></td>
+                        <td style={{ padding: "11px 10px", color: "#aaa", fontSize: 12 }}>{p.type}</td>
+                        <td style={{ padding: "11px 10px", color: "#888", fontSize: 12 }}>{formatDate(p.kickOff)}</td>
+                        <td style={{ padding: "11px 10px" }}><span style={statusBadge(qcStatus)}>{formatDate(p.qcll)}</span></td>
+                        <td style={{ padding: "11px 10px" }}><span style={statusBadge(pcdStatus)}>{formatDate(p.pcd)}</span></td>
+                        <td style={{ padding: "11px 10px", textAlign: "right", color: "#4ade80", fontFamily: "'Space Mono', monospace", fontSize: 12, fontWeight: 600 }}>{formatCurrency(p.fee)}</td>
+                        <td style={{ padding: "11px 10px", textAlign: "right" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
+                            <div style={{ width: 40, height: 4, borderRadius: 2, background: "#1e2028", overflow: "hidden" }}><div style={{ width: `${progress}%`, height: "100%", borderRadius: 2, background: overBudget ? "#ef4444" : progress > 90 ? "#f59e0b" : "#4ade80" }} /></div>
+                            <span style={{ color: "#aaa", fontFamily: "'Space Mono', monospace", fontSize: 12 }}>{targetHrs}</span>
+                          </div>
+                        </td>
+                        <td style={{ padding: "11px 10px", textAlign: "right", color: overBudget ? "#ef4444" : "#888", fontFamily: "'Space Mono', monospace", fontSize: 12, fontWeight: overBudget ? 800 : 400 }}>{p.hoursSpent}</td>
+                        <td style={{ padding: "11px 10px", textAlign: "center" }}>
+                          <div style={{ display: "flex", justifyContent: "center", gap: 4 }}>
+                            <button onClick={() => { setEditProject(p); setShowAddModal(true); }} style={{ background: "none", border: "none", color: "#666", cursor: "pointer", padding: 6, borderRadius: 4 }} title="Edit"><EditIcon /></button>
+                            <button onClick={() => handleDeleteClick(p)} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", padding: 6, borderRadius: 4 }} title="Delete"><TrashIcon /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr style={{ borderTop: "2px solid #2a2d35", background: "#13151b" }}>
+                    <td colSpan={9} style={{ padding: "12px 10px", fontWeight: 700, color: "#999", fontSize: 12 }}>ARCHIVED ({archivedFiltered.length} projects)</td>
+                    <td style={{ padding: "12px 10px", textAlign: "right", fontWeight: 800, color: "#4ade80", fontFamily: "'Space Mono', monospace", fontSize: 13 }}>{formatCurrency(archivedFiltered.reduce((s, p) => s + p.fee, 0))}</td>
+                    <td style={{ padding: "12px 10px", textAlign: "right", fontWeight: 700, color: "#aaa", fontFamily: "'Space Mono', monospace", fontSize: 13 }}>{rate > 0 ? archivedFiltered.reduce((s, p) => s + Math.round(p.fee / rate), 0).toLocaleString() : "—"}</td>
+                    <td style={{ padding: "12px 10px", textAlign: "right", fontWeight: 700, color: "#888", fontFamily: "'Space Mono', monospace", fontSize: 13 }}>{archivedFiltered.reduce((s, p) => s + p.hoursSpent, 0).toFixed(1)}</td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </>
         ) : (
           <>
             {/* ── RATE INPUT + FILTERS ── */}
@@ -574,7 +704,7 @@ export default function App() {
                         <td style={{ padding: "11px 10px", textAlign: "center" }}>
                           <div style={{ display: "flex", justifyContent: "center", gap: 4 }}>
                             <button onClick={() => { setEditProject(p); setShowAddModal(true); }} style={{ background: "none", border: "none", color: "#666", cursor: "pointer", padding: 6, borderRadius: 4 }} title="Edit"><EditIcon /></button>
-                            <button onClick={() => handleDelete(p.id)} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", padding: 6, borderRadius: 4 }} title="Delete"><TrashIcon /></button>
+                            <button onClick={() => handleDeleteClick(p)} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", padding: 6, borderRadius: 4 }} title="Delete"><TrashIcon /></button>
                           </div>
                         </td>
                       </tr>
@@ -620,6 +750,37 @@ export default function App() {
             <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
               <button onClick={() => setShowNotifModal(false)} style={btnSecondary}>Cancel</button>
               <button onClick={confirmSendNotif} className="btn-hover" style={btnPrimary}>Send to {notifTarget.manager}</button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* ── DELETE / ARCHIVE MODAL ── */}
+      <Modal open={showDeleteModal} onClose={() => { setShowDeleteModal(false); setDeleteTarget(null); }} title="Remove Project" width={480}>
+        {deleteTarget && (
+          <div>
+            <div style={{ background: "#12141a", borderRadius: 8, padding: 16, marginBottom: 20, border: "1px solid #1e2028" }}>
+              <p style={{ margin: "0 0 12px", fontSize: 14, color: "#e0e0e0", fontWeight: 600 }}>{deleteTarget.name}</p>
+              <p style={{ margin: 0, fontSize: 13, color: "#999", lineHeight: 1.6 }}>
+                What would you like to do with this project?
+              </p>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <button onClick={handleArchive} className="btn-hover" style={{ padding: "12px 20px", background: "rgba(59,130,246,0.12)", color: "#60a5fa", border: "1px solid rgba(59,130,246,0.25)", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", textAlign: "left", display: "flex", alignItems: "center", gap: 12, transition: "all 0.2s" }}>
+                <span style={{ fontSize: 18 }}>📁</span>
+                <div>
+                  <div>Move to Archive</div>
+                  <div style={{ fontSize: 11, fontWeight: 400, color: "#888", marginTop: 2 }}>Project data is preserved and moved to the Archive tab</div>
+                </div>
+              </button>
+              <button onClick={handlePermanentDelete} className="btn-hover" style={{ padding: "12px 20px", background: "rgba(239,68,68,0.08)", color: "#f87171", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", textAlign: "left", display: "flex", alignItems: "center", gap: 12, transition: "all 0.2s" }}>
+                <span style={{ fontSize: 18 }}>🗑️</span>
+                <div>
+                  <div>Delete Permanently</div>
+                  <div style={{ fontSize: 11, fontWeight: 400, color: "#888", marginTop: 2 }}>This cannot be undone — the project will be removed from the database</div>
+                </div>
+              </button>
+              <button onClick={() => { setShowDeleteModal(false); setDeleteTarget(null); }} style={{ ...btnSecondary, marginTop: 4, textAlign: "center" }}>Cancel</button>
             </div>
           </div>
         )}
