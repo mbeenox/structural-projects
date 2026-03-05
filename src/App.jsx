@@ -25,7 +25,7 @@ function getDeadlineStatus(dateStr) {
 function getProjectStatus(p) {
   if (p.holdDate) return { label: "Hold – " + formatDate(p.holdDate), key: "hold" };
   if (p.pcd && daysUntil(p.pcd) < 0) return { label: "Completed", key: "completed" };
-  return { label: "Current", key: "current" };
+  return { label: "Active", key: "active" };
 }
 
 // Map DB row → app object
@@ -314,7 +314,16 @@ export default function App() {
     setNotifications(notifs);
   }, [projects]);
 
-  const urgentCount = notifications.filter(n => n.severity === "critical" || n.severity === "overdue").length;
+  const urgentCount = projects.filter(p => {
+    if (!p.pcd) return false;
+    const d = daysUntil(p.pcd);
+    return d >= 0 && d <= 7;
+  }).length;
+
+  const activeCount = projects.filter(p => {
+    const status = getProjectStatus(p);
+    return status.key === "active";
+  }).length;
 
   // ── CRUD: Add / Update ──
   const handleSave = async (project) => {
@@ -457,7 +466,7 @@ export default function App() {
         {/* ── STAT CARDS ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 16, marginBottom: 24 }}>
           {[
-            { label: "Active Projects", value: projects.length, accent: "#d4a053" },
+            { label: "Active Projects", value: activeCount, accent: "#d4a053" },
             { label: "Total Fees", value: formatCurrency(totalFee), accent: "#4ade80" },
             { label: "Target Hours", value: totalTarget.toLocaleString(), accent: "#3b82f6" },
             { label: "Hours Spent", value: totalSpent.toFixed(1), accent: "#f59e0b" },
@@ -532,7 +541,7 @@ export default function App() {
                     const status = getProjectStatus(p);
                     const isGreyed = status.key === "hold" || status.key === "completed";
                     const rowOpacity = isGreyed ? 0.45 : 1;
-                    const statusColors = { current: { bg: "rgba(34,197,94,0.1)", fg: "#4ade80" }, completed: { bg: "rgba(59,130,246,0.1)", fg: "#60a5fa" }, hold: { bg: "rgba(245,158,11,0.1)", fg: "#fbbf24" } };
+                    const statusColors = { active: { bg: "rgba(34,197,94,0.1)", fg: "#4ade80" }, completed: { bg: "rgba(59,130,246,0.1)", fg: "#60a5fa" }, hold: { bg: "rgba(245,158,11,0.1)", fg: "#fbbf24" } };
                     const sc = statusColors[status.key];
                     return (
                       <tr key={p.id} style={{ borderBottom: "1px solid #1a1d23", opacity: rowOpacity, transition: "opacity 0.3s", background: isGreyed ? "rgba(255,255,255,0.02)" : "transparent" }}>
