@@ -175,6 +175,48 @@ function DashboardView({ projects, notifications, rate }) {
   );
 }
 
+// ── Inline Hours Input (saves reliably on blur) ──────────
+function HoursInput({ projectId, value, overBudget, onSave }) {
+  const [localVal, setLocalVal] = useState(String(value));
+  const [isFocused, setIsFocused] = useState(false);
+
+  // Sync from parent when not focused (e.g. after DB reload)
+  useEffect(() => {
+    if (!isFocused) setLocalVal(String(value));
+  }, [value, isFocused]);
+
+  return (
+    <input
+      type="number"
+      step="0.5"
+      value={localVal}
+      onFocus={() => setIsFocused(true)}
+      onChange={(e) => setLocalVal(e.target.value)}
+      onBlur={() => {
+        setIsFocused(false);
+        const parsed = parseFloat(localVal) || 0;
+        setLocalVal(String(parsed));
+        if (parsed !== value) {
+          onSave(projectId, parsed);
+        }
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.target.blur();
+        }
+      }}
+      style={{
+        width: 64, padding: "5px 6px", textAlign: "right",
+        background: overBudget ? "rgba(239,68,68,0.15)" : "#0d0f14",
+        border: overBudget ? "1px solid rgba(239,68,68,0.4)" : "1px solid #1e2028",
+        borderRadius: 5, color: overBudget ? "#ef4444" : "#aaa",
+        fontFamily: "'Space Mono', monospace", fontSize: 12, fontWeight: overBudget ? 800 : 400,
+        outline: "none", transition: "all 0.2s"
+      }}
+    />
+  );
+}
+
 // ══════════════════════════════════════════════════════════
 // ── MAIN APP ─────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════
@@ -197,8 +239,28 @@ export default function App() {
   const [notifTarget, setNotifTarget] = useState(null);
   const [currentView, setCurrentView] = useState("table");
   const [rate, setRate] = useState(100);
+  const [rateLoaded, setRateLoaded] = useState(false);
 
   const showToast = (message, type = "info") => setToast({ message, type });
+
+  // ── Load rate from Supabase ──
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase.from("settings").select("value").eq("key", "rate").single();
+      if (!error && data) setRate(parseFloat(data.value) || 100);
+      setRateLoaded(true);
+    })();
+  }, []);
+
+  // ── Save rate to Supabase when changed (debounced) ──
+  useEffect(() => {
+    if (!rateLoaded) return; // don't save on initial load
+    const timeout = setTimeout(async () => {
+      const { error } = await supabase.from("settings").upsert({ key: "rate", value: String(rate) });
+      if (error) showToast("Failed to save rate: " + error.message, "error");
+    }, 500);
+    return () => clearTimeout(timeout);
+  }, [rate, rateLoaded]);
 
   // ── Fetch from Supabase ──
   const fetchProjects = useCallback(async () => {
@@ -472,25 +534,14 @@ export default function App() {
                           </div>
                         </td>
                         <td style={{ padding: "6px 6px", textAlign: "right" }}>
-                          <input
-                            type="number"
-                            step="0.5"
+                          <HoursInput
+                            projectId={p.id}
                             value={p.hoursSpent}
-                            onChange={async (e) => {
-                              const val = parseFloat(e.target.value) || 0;
-                              setProjects(ps => ps.map(proj => proj.id === p.id ? { ...proj, hoursSpent: val } : proj));
-                            }}
-                            onBlur={async (e) => {
-                              const val = parseFloat(e.target.value) || 0;
-                              await supabase.from("projects").update({ hours_spent: val }).eq("id", p.id);
-                            }}
-                            style={{
-                              width: 64, padding: "5px 6px", textAlign: "right",
-                              background: overBudget ? "rgba(239,68,68,0.15)" : "#0d0f14",
-                              border: overBudget ? "1px solid rgba(239,68,68,0.4)" : "1px solid #1e2028",
-                              borderRadius: 5, color: overBudget ? "#ef4444" : "#aaa",
-                              fontFamily: "'Space Mono', monospace", fontSize: 12, fontWeight: overBudget ? 800 : 400,
-                              outline: "none", transition: "all 0.2s"
+                            overBudget={overBudget}
+                            onSave={async (id, val) => {
+                              setProjects(ps => ps.map(proj => proj.id === id ? { ...proj, hoursSpent: val } : proj));
+                              const { error } = await supabase.from("projects").update({ hours_spent: val }).eq("id", id);
+                              if (error) showToast("Failed to save hours: " + error.message, "error");
                             }}
                           />
                         </td>
