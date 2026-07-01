@@ -248,7 +248,7 @@ export default function App() {
   const [filterManager, setFilterManager] = useState("All");
   const [filterType, setFilterType] = useState("All");
   const [sortField, setSortField] = useState("kickOff");
-  const [sortDir, setSortDir] = useState("asc");
+  const [sortDir, setSortDir] = useState("desc");
   const [showAddModal, setShowAddModal] = useState(false);
   const [editProject, setEditProject] = useState(null);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
@@ -295,7 +295,7 @@ export default function App() {
   // ── Fetch from Supabase ──
   const fetchProjects = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase.from("projects").select("*").order("kick_off", { ascending: true });
+    const { data, error } = await supabase.from("projects").select("*").order("kick_off", { ascending: false, nullsFirst: false });
     if (error) {
       showToast("Failed to load projects: " + error.message, "error");
       setLoading(false);
