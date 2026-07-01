@@ -94,6 +94,7 @@ git push -u origin main
 - **Search & filter**: Use the search bar and dropdown filters
 - **Notifications**: Click the bell icon to see upcoming deadlines, then click "Notify" to send reminders
 - **Dashboard**: Toggle between Table and Dashboard views
+- **Light / Dark theme**: Click the sun/moon icon in the top bar to switch between the dark theme and the white theme. Your choice is remembered on that device.
 - All changes are saved instantly to your database
 
 ---
